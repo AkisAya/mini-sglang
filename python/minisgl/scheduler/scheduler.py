@@ -29,13 +29,15 @@ if TYPE_CHECKING:
 
 logger = init_logger(__name__)
 
+Indice2D: TypeAlias = Tuple[torch.Tensor, torch.Tensor]
+
 
 # For overlap scheduling, we also need to cache some other data to avoid IMA
 class ForwardInput(NamedTuple):
     batch: Batch
     sample_args: BatchSamplingArgs
-    load_indices: torch.Tensor
-    write_indices: torch.Tensor
+    input_tuple: Indice2D  # (token_mapping, positions)
+    write_tuple: Indice2D  # (req_mapping, seq_lens or 0)
 
 
 ForwardData: TypeAlias = "Tuple[ForwardInput, ForwardOutput]"
@@ -63,6 +65,7 @@ class Scheduler(SchedulerIOMixin):
             self.cache_manager, self.table_manager, self.decode_manager
         )
 
+        # some alias for easy access
         self.tp_info = config.tp_info
         self.finished_reqs: Set[Req] = set()
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_path)
@@ -70,7 +73,6 @@ class Scheduler(SchedulerIOMixin):
         self.page_table = self.engine.page_table
         self.token_pool = self.table_manager.token_pool
         self.prefill_budget = config.max_extend_tokens
-        self.dummy_write_2d_pos = (self.engine.dummy_req.table_idx, 1, 2)  # 0 for load, 1 for write
 
     def _process_last_data(
         self, last_data: ForwardData | None, ongoing_data: ForwardData | None
@@ -88,7 +90,7 @@ class Scheduler(SchedulerIOMixin):
             next_token_id = next_tokens_cpu[i]
             req.append_host(next_token_id.unsqueeze(0))
             next_token = int(next_token_id.item())
-            finished = not req.can_decode()
+            finished = not req.can_decode
             if not req.sampling_params.ignore_eos:
                 finished |= next_token == self.eos_token_id
             reply.append(DetokenizeMsg(uid=req.uid, next_token=next_token, finished=finished))
@@ -140,33 +142,24 @@ class Scheduler(SchedulerIOMixin):
 
     def _prepare_batch(self, batch: Batch) -> ForwardInput:
         needed_size = sum(r.extend_len for r in batch.reqs)
-        batch.out_loc = self.cache_manager.allocate(needed_size)
+        out_loc = self.cache_manager.allocate(needed_size)
         # NOTE: Pad the batch if needed
         if padding_size := self.engine.graph_runner.pad_batch(batch):
-            batch.out_loc = F.pad(batch.out_loc, (0, padding_size), value=self.engine.dummy_page)
-        # NOTE: prepare 2d indices for token ids loading and writing
-        load_indices = self._make_2d_indices(
-            [(r.table_idx, r.cached_len, r.device_len) for r in batch.padded_reqs]
-        )
-        write_indices = self._make_2d_indices(
-            [
-                (
-                    (r.table_idx, r.device_len, r.device_len + 1)
-                    if r.can_decode()  # NOTE: for chunked req, write to dummy pos
-                    else self.dummy_write_2d_pos
-                )
-                for r in batch.reqs
-            ]
-        )
+            out_loc = F.pad(out_loc, (0, padding_size), value=self.engine.dummy_page)
+        batch.out_loc = out_loc
+        batch.positions = _make_positions(batch, self.device)
+        input_mapping = _make_input_tuple(batch, self.device)
+        write_mapping = _make_write_tuple(batch, self.device)
+
         assert all(r.device_len < self.engine.max_seq_len for r in batch.reqs)
         # NOTE: write out_loc to page_table before `prepare_metadata`
-        self.page_table.view(-1)[load_indices] = batch.out_loc
+        self.page_table[input_mapping] = batch.out_loc
         self.engine.attn_backend.prepare_metadata(batch)
         return ForwardInput(
             batch=batch,
             sample_args=self.engine.sampler.prepare(batch),
-            load_indices=load_indices,
-            write_indices=write_indices,
+            input_tuple=input_mapping,
+            write_tuple=write_mapping,
         )
 
     def _schedule_next_batch(self) -> ForwardInput | None:
@@ -177,51 +170,13 @@ class Scheduler(SchedulerIOMixin):
         )
         return self._prepare_batch(batch) if batch else None
 
-    def _make_2d_indices(self, ranges: List[Tuple[int, int, int]]) -> torch.Tensor:
-        """
-        Return the 1D indices for the given 2D table and ranges.
-
-        Example: The underlying indices of a 2D table (3, 4) are:
-            [[ 0,  1,  2,  3],
-             [ 4,  5,  6,  7],
-             [ 8,  9, 10, 11]]
-        For ranges [(0, 1, 3), (2, 0, 2)], the returned indices are [1, 2, 8, 9].
-
-        Args:
-            ranges (List[Tuple[int, int, int]]): A list of tuples (entry, begin, end),
-                where `entry` is the row index in the 2D table, and `begin` and `end`
-                specify the range of column indices to include.
-        Returns:
-            torch.Tensor: A 1D tensor of indices.
-        """
-        STRIDE = self.token_pool.stride(0)
-        needed_size = sum(end - begin for _, begin, end in ranges)
-        indices_host = torch.empty(needed_size, dtype=torch.int32, pin_memory=True)
-        offset = 0
-        for entry, begin, end in ranges:
-            length = end - begin
-            offset += length
-            torch.arange(
-                begin + entry * STRIDE,
-                end + entry * STRIDE,
-                dtype=torch.int32,
-                out=indices_host[offset - length : offset],
-            )
-        return indices_host.to(self.device, non_blocking=True)
-
-    def _load_token_ids(self, input: ForwardInput) -> None:
-        input.batch.input_ids = self.token_pool.view(-1)[input.load_indices]
-
-    def _write_token_ids(self, input: ForwardInput, output: ForwardOutput) -> None:
-        self.token_pool.view(-1)[input.write_indices] = output.next_tokens_gpu
-
     def _forward(self, forward_input: ForwardInput) -> ForwardOutput:
-        self._load_token_ids(forward_input)
-        batch, sample_args = forward_input.batch, forward_input.sample_args
+        batch, sample_args, input_mapping, output_mapping = forward_input
+        batch.input_ids = self.token_pool[input_mapping]
         if ENV.OVERLAP_EXTRA_SYNC:  # NOTE: https://github.com/sgl-project/mini-sglang/issues/58
             self.stream.synchronize()
         forward_output = self.engine.forward_batch(batch, sample_args)
-        self._write_token_ids(forward_input, forward_output)
+        self.token_pool[output_mapping] = forward_output.next_tokens_gpu
         self.decode_manager.filter_reqs(forward_input.batch.reqs)
         return forward_output
 
@@ -238,7 +193,7 @@ class Scheduler(SchedulerIOMixin):
         which can effectively hide CPU latency and improve GPU utilization.
         """
         blocking = not (
-            last_data  # don't block if we have a batch to be processed
+            last_data is not None  # don't block if we have a batch to be processed
             or self.prefill_manager.runnable
             or self.decode_manager.runnable
         )
@@ -284,3 +239,36 @@ class Scheduler(SchedulerIOMixin):
         torch.cuda.synchronize(self.device)
         self.sync_all_ranks()
         self.engine.shutdown()
+
+
+def _make_positions(batch: Batch, device: torch.device) -> torch.Tensor:
+    indices_host = torch.empty(len(batch.out_loc), dtype=torch.int32, pin_memory=True)
+    offset = 0
+    for req in batch.padded_reqs:
+        length = req.extend_len
+        torch.arange(
+            req.cached_len,
+            req.device_len,
+            dtype=torch.int32,
+            out=indices_host[offset : offset + length],
+        )
+        offset += length
+    return indices_host.to(device, non_blocking=True)
+
+
+def _make_input_tuple(batch: Batch, device: torch.device) -> Indice2D:
+    mapping_host = torch.empty(len(batch.out_loc), dtype=torch.int32, pin_memory=True)
+    offset = 0
+    for req in batch.padded_reqs:
+        length = req.extend_len
+        mapping_host[offset : offset + length].fill_(req.table_idx)
+        offset += length
+    return mapping_host.to(device, non_blocking=True), batch.positions
+
+
+def _make_write_tuple(batch: Batch, device: torch.device) -> Indice2D:
+    mapping_list = [req.table_idx for req in batch.reqs]
+    mapping_host = torch.tensor(mapping_list, dtype=torch.int32, pin_memory=True)
+    write_list = [(req.device_len if req.can_decode else -1) for req in batch.reqs]
+    write_host = torch.tensor(write_list, dtype=torch.int32, pin_memory=True)
+    return mapping_host.to(device, non_blocking=True), write_host.to(device, non_blocking=True)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import functools
 from typing import TYPE_CHECKING, Tuple
 
 from .utils import KernelConfig, load_jit, make_cpp_args
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 DEFAULT_INDEX_KERNEL_CONFIG = KernelConfig(num_threads=128, max_occupancy=1, use_pdl=False)
 
 
-@lru_cache(maxsize=None)
+@functools.cache
 def _jit_index_module(
     element_size: int,
     *,

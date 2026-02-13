@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import functools
 import math
-from functools import lru_cache
 from typing import Any, Callable, Dict, Tuple
 
 import torch
@@ -98,7 +98,7 @@ def set_rope_device(device: torch.device):
     _ROPE_DEVICE = device
 
 
-@lru_cache()
+@functools.cache
 def get_rope(
     head_dim: int,
     rotary_dim: int,

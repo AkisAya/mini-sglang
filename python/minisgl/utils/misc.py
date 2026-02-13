@@ -17,20 +17,15 @@ def call_if_main(name: str = "__main__", discard: bool | None = None):
             return lambda f: (f() and None) or f
 
 
-def divide_even(a: int, b: int) -> int:
+def div_even(a: int, b: int) -> int:
     """Divides two integers"""
     assert a % b == 0, f"{a = } must be divisible by {b = }"
     return a // b
 
 
-def divide_up(a: int, b: int) -> int:
+def div_ceil(a: int, b: int) -> int:
     """Divides two integers, rounding up"""
     return (a + b - 1) // b
-
-
-def divide_down(a: int, b: int) -> int:
-    """Divides two integers, rounding down"""
-    return a // b
 
 
 class Unset:

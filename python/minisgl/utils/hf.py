@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import functools
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from transformers import LlamaConfig
 
 
-@lru_cache()
+@functools.cache
 def _load_config(model_path: str) -> Any:
     from transformers import AutoConfig
 

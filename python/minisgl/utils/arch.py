@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import functools
 from typing import Tuple
 
 
-@lru_cache(maxsize=None)
+@functools.cache
 def _get_torch_cuda_version() -> Tuple[int, int] | None:
     import torch
     import torch.version

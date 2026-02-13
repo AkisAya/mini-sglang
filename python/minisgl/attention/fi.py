@@ -8,11 +8,10 @@ from typing import TYPE_CHECKING, Dict, List, Literal
 import torch
 from minisgl.distributed import get_tp_info
 from minisgl.env import ENV
-from minisgl.utils import divide_even
-from minisgl.utils.logger import init_logger
+from minisgl.utils import div_even, init_logger
 
 from .base import BaseAttnBackend, BaseAttnMetadata
-from .utils import BaseCaptureData, make_positions
+from .utils import BaseCaptureData
 
 if TYPE_CHECKING:
     from flashinfer import (
@@ -67,17 +66,13 @@ class FIMetadata(BaseAttnMetadata):
     def __post_init__(self) -> None:
         assert self.page_size == 1, "Currently only page_size=1 is supported."
         assert (
-            self.positions.is_cuda
-            and self.cu_seqlens_k_cpu.is_cpu
+            self.cu_seqlens_k_cpu.is_cpu
             and self.cu_seqlens_q_cpu.is_cpu
             and self.cu_seqlens_q_gpu.is_cuda
             and self.indices.is_cuda
             and self.last_page_len_cpu.is_cpu
             and self.seq_lens_cpu.is_cpu
         )
-
-    def get_positions(self) -> torch.Tensor:
-        return self.positions
 
     def get_last_indices(self, bs: int) -> torch.Tensor:
         return self.cu_seqlens_q_gpu[1 : 1 + bs] - 1
@@ -104,12 +99,13 @@ class FlashInferBackend(BaseAttnBackend):
         self.prefill_wrapper = BatchPrefillWithPagedKVCacheWrapper(
             self.float_workspace_buffer,
             kv_layout="NHD",
-            backend="fa2",  # flashinfer fa3 is buggy, use fa2 instead
+            backend="fa2",  # flashinfer fa3 is slow, use fa2 instead
         )
         self.decode_wrappers = BatchDecodeWithPagedKVCacheWrapper(
             self.float_workspace_buffer,
             use_tensor_cores=self.use_tensor_cores,
             kv_layout="NHD",
+            backend="fa2",  # flashinfer fa3 is slow, use fa2 instead
         )
 
         # NOTE: some hack to reuse the int_workspace_buffer
@@ -118,8 +114,8 @@ class FlashInferBackend(BaseAttnBackend):
 
         # initialize some data members
         tp_size = get_tp_info().size
-        self.qo_head_local = divide_even(self.config.num_qo_heads, tp_size)
-        self.kv_head_local = divide_even(self.config.num_kv_heads, tp_size)
+        self.qo_head_local = div_even(self.config.num_qo_heads, tp_size)
+        self.kv_head_local = div_even(self.config.num_kv_heads, tp_size)
 
         self.cached_ones_cpu: torch.Tensor = torch.tensor([], dtype=torch.int32, pin_memory=True)
         # for cuda graph
@@ -209,7 +205,6 @@ class FlashInferBackend(BaseAttnBackend):
         else:  # normal extend prefill, with partial cache hit
             cu_seqlens_q_cpu = torch.tensor([0] + seqlens_q, **cpu_kwargs).cumsum_(dim=0)
         batch.attn_metadata = FIMetadata(
-            positions=make_positions(device, reqs),
             cu_seqlens_q_cpu=cu_seqlens_q_cpu,
             cu_seqlens_k_cpu=cu_seqlens_k_cpu,
             cu_seqlens_q_gpu=cu_seqlens_q_cpu.to(device, non_blocking=True),
@@ -247,7 +242,6 @@ class FlashInferBackend(BaseAttnBackend):
 
         bs = batch.size
         assert bs in self.capture_bs and bs not in self.graph_wrappers and self.capture
-        batch.padded_reqs = batch.reqs
         capture = self.capture
         self.graph_wrappers[bs] = CUDAGraphBatchDecodeWithPagedKVCacheWrapper(
             self.float_workspace_buffer,
@@ -257,22 +251,17 @@ class FlashInferBackend(BaseAttnBackend):
             indices_buffer=capture.indices,
             last_page_len_buffer=capture.one_tensor[:bs],
         )
+        self.graph_wrappers[bs]._backend = "fa2"
         self.graph_wrappers[bs]._int_workspace_buffer = self.int_workspace_buffer
         self.prepare_metadata(batch)
         metadata = batch.attn_metadata
         assert isinstance(metadata, FIMetadata)
         metadata.wrapper = self.graph_wrappers[bs]
-        metadata.positions = capture.positions[:bs]
-        batch.input_ids = capture.input_ids[:bs]
-        batch.out_loc = capture.out_loc[:bs]
         self._initialize_metadata_once(metadata)
 
     def prepare_for_replay(self, batch: Batch) -> None:
         metadata, bs = batch.attn_metadata, batch.padded_size
         assert isinstance(metadata, FIMetadata) and not metadata.initialized
         assert self.capture is not None and bs in self.capture_bs
-        self.capture.input_ids[:bs].copy_(batch.input_ids)
-        self.capture.out_loc[:bs].copy_(batch.out_loc)
-        self.capture.positions[:bs].copy_(metadata.positions)
         metadata.wrapper = self.graph_wrappers[bs]
         self._initialize_metadata_once(metadata)

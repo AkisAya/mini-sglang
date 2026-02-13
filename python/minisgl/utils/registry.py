@@ -1,4 +1,4 @@
-from typing import Callable, Generic, List, TypeVar
+from typing import Callable, Generic, Iterable, List, TypeVar
 
 T = TypeVar("T")
 
@@ -24,3 +24,15 @@ class Registry(Generic[T]):
 
     def supported_names(self) -> List[str]:
         return list(self._registry.keys())
+
+    def assert_supported(self, names: str | Iterable[str]) -> None:
+        if isinstance(names, str):
+            names = [names]
+        for name in names:
+            if name not in self._registry:
+                from argparse import ArgumentTypeError
+
+                raise ArgumentTypeError(
+                    f"Unsupported {self._type}: {name}. "
+                    f"Supported items: {self.supported_names()}"
+                )

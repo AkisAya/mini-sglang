@@ -8,7 +8,7 @@ import safetensors
 import torch
 from huggingface_hub import snapshot_download
 from minisgl.distributed import get_tp_info
-from minisgl.utils import divide_up
+from minisgl.utils import div_ceil
 from tqdm.asyncio import tqdm
 
 
@@ -40,7 +40,7 @@ def _shard_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
             shard_state_dict[key] = value.chunk(n, dim=1)[r]
         elif key.count("lm_head") or key.count("embed_tokens"):
             num_embeddings = value.shape[0]
-            num_embeddings_per_partition = divide_up(num_embeddings, n)
+            num_embeddings_per_partition = div_ceil(num_embeddings, n)
             vocab_start_idx = r * num_embeddings_per_partition
             vocab_end_idx = min((r + 1) * num_embeddings_per_partition, num_embeddings)
             shard_state_dict[key] = value[vocab_start_idx:vocab_end_idx, :]

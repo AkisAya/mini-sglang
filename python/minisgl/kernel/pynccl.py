@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import functools
 from typing import TYPE_CHECKING, Any, Literal
 
 from minisgl.env import ENV
@@ -25,12 +25,12 @@ else:
     PyNCCLCommunicator = Any
 
 
-@lru_cache(maxsize=None)
+@functools.cache
 def _load_nccl_module() -> Module:
     return load_aot("pynccl", cuda_files=["pynccl.cu"], extra_ldflags=["-lnccl"])
 
 
-@lru_cache(maxsize=None)
+@functools.cache
 def _get_pynccl_wrapper_cls():
     import tvm_ffi
 

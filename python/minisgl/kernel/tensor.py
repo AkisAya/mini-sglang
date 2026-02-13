@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import functools
 from typing import TYPE_CHECKING
 
 from .utils import load_aot
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from tvm_ffi import Module
 
 
-@lru_cache(maxsize=None)
+@functools.cache
 def _load_test_tensor_module() -> Module:
     return load_aot("test_tensor", cpp_files=["tensor.cpp"])
 

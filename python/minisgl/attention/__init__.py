@@ -23,7 +23,7 @@ class BackendCreator(Protocol):
 SUPPORTED_ATTENTION_BACKENDS = Registry[BackendCreator]("Attention Backend")
 
 
-def resolve_auto_backend(config: ModelConfig) -> str:
+def resolve_auto_backend() -> str:
     """Determine the best attention backend based on the GPU architecture and model."""
     if is_sm100_supported():  # blackwell
         return "fi"
@@ -47,17 +47,10 @@ def create_fa_backend(config: ModelConfig, kvcache: BaseKVCache, page_table: tor
     return FlashAttentionBackend(config, kvcache, page_table)
 
 
-def validate_backend(backend: str):
+def validate_attn_backend(backend: str):
     if backend != "auto":
         required_backends = backend.split(",") if "," in backend else [backend]
-        supported = SUPPORTED_ATTENTION_BACKENDS.supported_names()
-        for b in required_backends:
-            if b not in supported:
-                from argparse import ArgumentTypeError
-
-                raise ArgumentTypeError(
-                    f"Unsupported attention backend: {b}. Supported backends: {supported}"
-                )
+        SUPPORTED_ATTENTION_BACKENDS.assert_supported(required_backends)
     return backend
 
 
@@ -68,9 +61,10 @@ def create_attention_backend(
     page_table: torch.Tensor,
 ) -> BaseAttnBackend:
     if backend == "auto":
-        backend = resolve_auto_backend(config)
+        backend = resolve_auto_backend()
         logger.info(f"Auto-selected attention backend: {backend}")
 
+    validate_attn_backend(backend)
     if "," in backend:
         assert backend.count(",") == 1, "Only one comma is allowed in hybrid backend"
         p_backend, d_backend = backend.split(",", 1)
@@ -90,5 +84,5 @@ __all__ = [
     "BaseAttnBackend",
     "create_attention_backend",
     "SUPPORTED_ATTENTION_BACKENDS",
-    "validate_backend",
+    "validate_attn_backend",
 ]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import functools
 from typing import TYPE_CHECKING
 
 from .utils import load_aot
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from tvm_ffi import Module
 
 
-@lru_cache(maxsize=None)
+@functools.cache
 def _load_radix_module() -> Module:
     return load_aot("radix", cpp_files=["radix.cpp"])
 

@@ -1,7 +1,7 @@
 from .arch import is_arch_supported, is_sm90_supported, is_sm100_supported
 from .hf import cached_load_hf_config
 from .logger import init_logger
-from .misc import UNSET, Unset, call_if_main, divide_down, divide_even, divide_up
+from .misc import UNSET, Unset, call_if_main, div_ceil, div_even
 from .mp import (
     ZmqAsyncPullQueue,
     ZmqAsyncPushQueue,
@@ -20,9 +20,8 @@ __all__ = [
     "is_sm90_supported",
     "is_sm100_supported",
     "call_if_main",
-    "divide_even",
-    "divide_up",
-    "divide_down",
+    "div_even",
+    "div_ceil",
     "UNSET",
     "Unset",
     "torch_dtype",

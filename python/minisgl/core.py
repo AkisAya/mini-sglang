@@ -9,6 +9,7 @@ import torch
 if TYPE_CHECKING:
     from minisgl.attention import BaseAttnBackend, BaseAttnMetadata
     from minisgl.kvcache import BaseCacheHandle
+    from minisgl.moe import BaseMoeBackend
 
 
 @dataclass
@@ -55,6 +56,7 @@ class Req:
     def append_host(self, next_token: torch.Tensor) -> None:
         self.input_ids = torch.cat([self.input_ids, next_token])
 
+    @property
     def can_decode(self) -> bool:
         return self.remain_len > 0
 
@@ -72,8 +74,9 @@ class Batch:
     phase: Literal["prefill", "decode"]
     # these fields should be set by scheduler
     input_ids: torch.Tensor = field(init=False)
+    positions: torch.Tensor = field(init=False)
     out_loc: torch.Tensor = field(init=False)
-    padded_reqs: List[Req] = field(init=False)  # may contain some dummy reqs for padding
+    padded_reqs: List[Req] = field(init=False)
     # this field should be set by attention backend
     attn_metadata: BaseAttnMetadata = field(init=False)
 
@@ -98,6 +101,7 @@ class Batch:
 class Context:
     page_size: int
     attn_backend: BaseAttnBackend
+    moe_backend: BaseMoeBackend = field(init=False)
     _batch: Batch | None = field(default=None, init=False)
 
     @property

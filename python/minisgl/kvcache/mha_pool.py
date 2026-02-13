@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 from minisgl.distributed import get_tp_info
-from minisgl.utils import divide_even
+from minisgl.utils import div_even
 
 from .base import BaseKVCache, KVCacheLayout
 
@@ -24,7 +24,7 @@ class MHAKVCache(BaseKVCache):
         device: torch.device,
     ):
         tp_info = get_tp_info()
-        local_kv_heads = divide_even(num_kv_heads, tp_info.size)
+        local_kv_heads = div_even(num_kv_heads, tp_info.size)
         match kv_layout:
             case KVCacheLayout.PageFirst:
                 kv_buffer = torch.empty(

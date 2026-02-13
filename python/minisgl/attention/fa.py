@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, List, Tuple
 import torch
 
 from .base import BaseAttnBackend, BaseAttnMetadata
-from .utils import BaseCaptureData, make_positions
+from .utils import BaseCaptureData
 
 if TYPE_CHECKING:
     from minisgl.core import Batch
@@ -28,9 +28,6 @@ class FAMetadata(BaseAttnMetadata):
     max_seqlen_q: int
 
     page_table: torch.Tensor
-
-    def get_positions(self) -> torch.Tensor:
-        return self.positions
 
     def get_last_indices(self, bs: int) -> torch.Tensor:
         return self.cu_seqlens_q[1 : 1 + bs] - 1
@@ -89,7 +86,6 @@ class FlashAttentionBackend(BaseAttnBackend):
             cu_seqlens_q = torch.tensor([0] + seqlens_q, **cpu_kwargs).cumsum_(dim=0)
             cu_seqlens_q = cu_seqlens_q.to(self.kvcache.device, non_blocking=True)
 
-        positions = make_positions(device, reqs)
         page_table = self.page_table
         new_page_table = torch.stack([page_table[req.table_idx, :max_seqlen_k] for req in reqs])
 
@@ -97,7 +93,6 @@ class FlashAttentionBackend(BaseAttnBackend):
         batch.attn_metadata = FAMetadata(
             cu_seqlens_k=cu_seqlens_k,
             cu_seqlens_q=cu_seqlens_q,
-            positions=positions,
             cache_seqlens=cache_seqlens,
             max_seqlen_k=max_seqlen_k,
             max_seqlen_q=max_seqlen_q,
@@ -118,25 +113,19 @@ class FlashAttentionBackend(BaseAttnBackend):
         metadata = FAMetadata(
             cu_seqlens_k=capture.cu_seqlens_k[: bs + 1],
             cu_seqlens_q=capture.cu_seqlens_q[: bs + 1],
-            positions=capture.positions[:bs],
             cache_seqlens=capture.seq_lens[:bs],
             max_seqlen_k=capture.page_table.size(1),
             max_seqlen_q=1,  # decode only
             page_table=capture.page_table[:bs, :],
         )
         batch.attn_metadata = metadata
-        batch.input_ids = capture.input_ids[:bs]
-        batch.out_loc = capture.out_loc[:bs]
 
     def prepare_for_replay(self, batch: Batch) -> None:
         metadata, bs = batch.attn_metadata, batch.padded_size
         assert isinstance(metadata, FAMetadata)
         assert self.capture is not None and bs in self.capture_bs
         # cu_seqlens_q is always [0, 1, 2, ..., bs] for decode (i.e. no-op)
-        self.capture.input_ids[:bs].copy_(batch.input_ids)
-        self.capture.out_loc[:bs].copy_(batch.out_loc)
         self.capture.cu_seqlens_k[: bs + 1].copy_(metadata.cu_seqlens_k)
-        self.capture.positions[:bs].copy_(metadata.positions)
         self.capture.seq_lens[:bs].copy_(metadata.cache_seqlens)
         self.capture.page_table[:bs, : metadata.max_seqlen_k].copy_(metadata.page_table)
 

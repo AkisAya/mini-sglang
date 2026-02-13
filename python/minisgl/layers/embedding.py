@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from minisgl.core import get_global_ctx
 from minisgl.distributed import DistributedCommunicator, get_tp_info
-from minisgl.utils import divide_up, nvtx_annotate
+from minisgl.utils import div_ceil, nvtx_annotate
 
 from .base import BaseOP
 
@@ -22,7 +22,7 @@ class VocabParallelEmbedding(BaseOP):
         tp_rank = tp_info.rank
         self.tp_size = tp_info.size
         self.num_embeddings = num_embeddings
-        self.num_embeddings_tp = divide_up(num_embeddings, self.tp_size)
+        self.num_embeddings_tp = div_ceil(num_embeddings, self.tp_size)
         start_idx = self.num_embeddings_tp * tp_rank
         finish_idx = min(start_idx + self.num_embeddings_tp, num_embeddings)
         self.vocab_range = (start_idx, finish_idx - start_idx)
