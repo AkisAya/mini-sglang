@@ -118,6 +118,7 @@ class Engine:
             max_bytes = (
                 config.max_forward_len * config.model_config.hidden_size * self.dtype.itemsize
             )
+            # 初始化 pynccl 通信
             enable_pynccl_distributed(config.tp_info, tp_cpu_group, max_bytes)
         else:
             torch.distributed.init_process_group(

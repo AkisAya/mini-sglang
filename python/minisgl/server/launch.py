@@ -49,6 +49,7 @@ def launch_server(run_shell: bool = False) -> None:
 
         from minisgl.tokenizer import tokenize_worker
 
+        # "spawn",子进程不会继承父进程的内存状态（比如锁、线程、某些 C 扩展的状态）
         mp.set_start_method("spawn", force=True)
 
         world_size = server_args.tp_info.size
@@ -85,6 +86,7 @@ def launch_server(run_shell: bool = False) -> None:
             daemon=False,
             name="minisgl-detokenizer-0",
         ).start()
+
         for i in range(num_tokenizers):
             mp.Process(
                 target=tokenize_worker,

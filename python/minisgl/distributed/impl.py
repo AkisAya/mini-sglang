@@ -86,7 +86,7 @@ def enable_pynccl_distributed(
         tp_cpu_group=tp_cpu_group,
         max_size_bytes=max_bytes,
     )
-
+    # 启用 PyNCCL 通信插件 执行 all_reduce 和 all_gather 操作
     DistributedCommunicator.plugins.append(PyNCCLDistributedImpl(comm))
 
 
